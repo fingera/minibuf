@@ -1,0 +1,23 @@
+{
+  "name": "minibuf",
+  "version": "1.0.0",
+  "description": "mini serializer",
+  "main": "index.js",
+  "dependencies": {},
+  "devDependencies": {
+    "assert": "^1.4.1"
+  },
+  "scripts": {
+    "test": "node ./test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "github.com/fingera/minibuf.js"
+  },
+  "keywords": [
+    "protobuf",
+    "minibuf"
+  ],
+  "author": "liuyujun@fingera.cn",
+  "license": "MIT"
+}
