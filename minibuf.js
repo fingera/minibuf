@@ -1,5 +1,6 @@
 /**
  * Copyright liuyujun@fingera.cn
+ * null byte uint int double string
  */
 
 const MIN_BYTE = 0;
@@ -82,7 +83,7 @@ function check_name(name) {
 }
 function check_buf(length, cursor, count) {
   if (cursor + count > length) {
-    throw new Error("end of buffer: " + cursor + "+" + count + "/" + length);
+    throw new Error(`end of buffer: ${cursor}+${count}/${length}`);
   }
 }
 function throw_if(condition, message) {
@@ -126,23 +127,27 @@ function enc_uint(arr, value) {
   if (value === undefined) {
     value = DEFAULT_UINT;
   }
-  if (value != Math.floor(value) || value < MIN_UINT || value >= MAX_UINT) {
+  if (value != Math.floor(value) || value < MIN_UINT || value > MAX_UINT ||
+      !Number.isInteger(value)) {
     throw new Error("invalid uint: " + value);
   }
-  while (value > 0x7F) {
-    arr.push((value & 0x7F) | 0x80);
-    value >>>= 7;
+  let low = value >>> 0;
+  let high = Math.floor((value - low) / 0x100000000) >>> 0;
+  while (high > 0 || low > 127) {
+    arr.push((low & 0x7f) | 0x80);
+    low = ((low >>> 7) | (high << 25)) >>> 0;
+    high = high >>> 7;
   }
-  arr.push(value);
+  arr.push(low);
 }
 function dec_uint(buf) {
   const { cursor, bytes } = buf;
   const { length } = bytes;
   let r = 0;
-  let i = 0
+  let i = 0;
   for (; i < 8; i++) {
     const byte = bytes[cursor + i];
-    r |= ((byte & 0x7F) << i * 7);
+    r += Math.floor((byte & 0x7F) * Math.pow(2, i * 7));
     if (byte < 0x80) {
       i++;
       break;
@@ -157,27 +162,31 @@ function enc_int(arr, value) {
   if (value === undefined) {
     value = DEFAULT_INT;
   }
-  if (value != Math.floor(value) || value < MIN_INT || value >= MAX_INT) {
+  if (value != Math.floor(value) || value < MIN_INT || value > MAX_INT ||
+      !Number.isInteger(value)) {
     throw new Error("invalid int: " + value);
   }
+  let first;
   if (value < 0) {
     value = -value;
-    arr.push(0x81 | ((value & 0x3F) << 1));
+    first = ((value & 0x3F) << 1) | 1;
   } else {
-    arr.push(0x80 | ((value & 0x3F) << 1));
+    first = ((value & 0x3F) << 1);
   }
-  value >>>= 6;
+  value = Math.floor(value / 64);
   if (value <= 0) {
+    arr.push(first);
     return;
   }
+  arr.push(first | 0x80);
   enc_uint(arr, value);
 }
 function dec_int(buf) {
   let value = dec_uint(buf);
   if ((value & 1) === 1) {
-    value = -(value >>> 1);
+    value = -Math.floor(value / 2);
   } else {
-    value >>>= 1;
+    value = Math.floor(value / 2);
   }
   return value;
 }
@@ -185,6 +194,8 @@ function dec_int(buf) {
 function enc_double(arr, value) {
   if (value === undefined) {
     value = DEFAULT_DOUBLE;
+  } else if ((typeof value).toLowerCase() !== "number") {
+    throw new Error("invalid double: " + value);
   }
   let sign;
   if (value < 0) {
@@ -194,14 +205,10 @@ function enc_double(arr, value) {
     sign = 0;
   }
   if (value === 0) {
-    if ((1 / value) > 0) {
-      arr.push(0, 0, 0, 0, 0, 0, 0, 0);
-    } else {
-      arr.push(0, 0, 0, 0, 0, 0, 0, 0x80);
-    }
-  } else if (isNaN(value)) {
+    arr.push(0, 0, 0, 0, 0, 0, 0, 0); // +0
+  } else if (isNaN(value)) { // NaN
     arr.push(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F);
-  } else if (value > MAX_DOUBLE) {
+  } else if (value > MAX_DOUBLE) { // Infinity
     arr.push(0, 0, 0, 0, 0, 0, 0xF0, 0x7F | sign << 7);
   } else if (value < MIN_DOUBLE) {
     const mant = value / Math.pow(2, -1074);
@@ -286,12 +293,12 @@ function enc_string(arr, value) {
   }
 }
 function dec_string(buf) {
+  const limit = dec_uint(buf);
+  const code_units = [];
+  let result = "";
   const { bytes } = buf;
   let { cursor } = buf;
   const { length } = bytes;
-  const code_units = [];
-  let result = "";
-  const limit = dec_uint(buf);
 
   while (result.length + code_units.length < limit) {
     const c1 = bytes[cursor++];
@@ -314,7 +321,7 @@ function dec_string(buf) {
       const c3 = bytes[cursor++];
       const c4 = bytes[cursor++];
       check_buf(length, cursor, 0);
-      const codepoint = (((c & 7) << 18) |
+      const codepoint = (((c1 & 7) << 18) |
                         ((c2 & 0x3F) << 12) |
                         ((c3 & 0x3F) << 6) |
                         (c4 & 0x3F)) - 0x10000;
@@ -344,6 +351,7 @@ function array_merge(arr, subarr) {
     }
   }
 }
+
 function scan_dep(key, descriptors, cache, parent) {
   check_name(key);
 
@@ -355,22 +363,19 @@ function scan_dep(key, descriptors, cache, parent) {
   if (cache[key] !== undefined) {
     return cache[key]; // already cached
   }
+  if (parent === undefined) {
+    parent = [];
+  }
 
   let deps = [];
-  const scan_child = (child) => {
-    throw_if(parent.indexOf(child) >= 0, "cyclic dependence");
-    const subdep = scan_dep(child, descriptors, cache, parent);
-    if (subdep !== undefined) {
-      array_merge(deps, subdep);
-    }
-    if (deps.indexOf(child) < 0) {
-      deps.push(child);
-    }
-  };
   const scan_string = (str) => {
     const info = parse_name(str);
-    if (descriptors[info.name] !== undefined) {
-      scan_child(info.name);
+    if (descriptors[info.name] !== undefined && deps.indexOf(info.name) < 0) {
+      parent.push(key);
+      throw_if(parent.indexOf(info.name) >= 0, "cyclic dependence");
+      array_merge(deps, scan_dep(info.name, descriptors, cache, parent));
+      parent.pop();
+      deps.push(info.name);
     }
   };
   const scan_object = (obj) => {
@@ -388,7 +393,6 @@ function scan_dep(key, descriptors, cache, parent) {
     }
   };
 
-  parent.push(key);
   const type = (typeof value).toLowerCase();
   if (type === "string") {
     scan_string(value);
@@ -396,7 +400,6 @@ function scan_dep(key, descriptors, cache, parent) {
     scan_object(value);
   }
   cache[key] = deps;
-  parent.pop();
   return deps;
 }
 class enc_object {
@@ -431,13 +434,21 @@ class enc_object {
             const { length } = value;
             enc_uint(arr, length);
             for (let i = 0; i < length; i++) {
-              encoder(arr, value[i]);
+              try {
+                encoder(arr, value[i]);
+              } catch (e) {
+                throw new Error(`array ${i}: ${e.message}`);
+              }
             }
           }, (buf) => {
             const ret = [];
             const length = dec_uint(buf);
             for (let i = 0; i < length; i++) {
-              ret.push(decoder(buf));
+              try {
+                ret.push(decoder(buf));
+              } catch (e) {
+                throw new Error(`array ${i}: ${e.message}`);
+              }
             }
             return ret;
           },
@@ -451,13 +462,24 @@ class enc_object {
             if (!Array.isArray(value)) {
               throw new Error("is not array");
             }
+            if (value.length !== fixlen) {
+              throw new Error(`length diff ${fixlen} != ${value.length}`);
+            }
             for (let i = 0; i < fixlen; i++) {
-              encoder(arr, value[i]);
+              try {
+                encoder(arr, value[i]);
+              } catch (e) {
+                throw new Error(`array ${i}: ${e.message}`);
+              }
             }
           }, (buf) => {
             const ret = [];
             for (let i = 0; i < fixlen; i++) {
-              ret.push(decoder(buf));
+              try {
+                ret.push(decoder(buf));
+              } catch (e) {
+                throw new Error(`array ${i}: ${e.message}`);
+              }
             }
             return ret;
           },
@@ -465,32 +487,30 @@ class enc_object {
       }
     }
   }
-  _gen_object_coder(decriptors) {
-    const keys = decriptors.keys();
+  _gen_object_coder(descriptors) {
+    if ((typeof descriptors).toLowerCase() === "string") {
+      const id = this._name2id[descriptors];
+      throw_if(id === undefined, `bad type ${descriptors}`);
+      return [
+        this._encoders[id],
+        this._decoders[id],
+      ];
+    }
+    const keys = Object.keys(descriptors);
     // sort
     keys.sort();
-    const sorted_keys = [];
-    const parent = [];
-    const cache = {};
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i];
-      parent.push(key);
-      const deps = scan_dep(keys[i], descriptors, cache, parent);
-      array_merge(sorted_keys, deps);
-      parent.pop();
-    }
     // gen coder
     const encoders = [];
     const decoders = [];
     const names = [];
-    for (let i = 0; i < sorted_keys.length; i++) {
-      const key = sorted_keys[i];
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
       const value = descriptors[key];
       let coder;
       if ((typeof value).toLowerCase() === "string") {
         const info = parse_name(value);
         const id = this._name2id[info.name];
-        throw_if(id === undefined, "bad sub type");
+        throw_if(id === undefined, `bad sub type ${info.name}`);
         coder = this._gen_array_coder(info.arr, info.arr.length - 1, id);
       } else {
         coder = this._gen_object_coder(value);
@@ -507,15 +527,23 @@ class enc_object {
           value = {};
         }
         if ((typeof value).toLowerCase() !== "object") {
-          throw new Error("is not object");
+          throw new Error(`is not object`);
         }
         for (let i = 0; i < fixlen; i++) {
-          encoders[i](arr, value[names[i]]);
+          try {
+            encoders[i](arr, value[names[i]]);
+          } catch (e) {
+            throw new Error(`${names[i]}: ${e.message}`);
+          }
         }
       }, (buf) => {
         const ret = {};
         for (let i = 0; i < fixlen; i++) {
-          ret[names[i]] = decoders[i](buf);
+          try {
+            ret[names[i]] = decoders[i](buf);
+          } catch (e) {
+            throw new Error(`${names[i]}: ${e.message}`);
+          }
         }
         return ret;
       },
@@ -539,6 +567,27 @@ class enc_object {
     check_name(name);
     const [encoder, decoder] = this._gen_object_coder(decriptors);
     this.add_type(name, encoder, decoder);
+  }
+  add_object_set(objs) {
+    const names = Object.keys(objs);
+    names.sort();
+    const sorted_names = [];
+    const cache = {};
+    for (let i = 0; i < names.length; i++) {
+      const key = names[i];
+      if (sorted_names.indexOf(key) >= 0) {
+        continue; // already appended
+      }
+      const dep = scan_dep(key, objs, cache);
+      array_merge(sorted_names, dep);
+      array_merge(sorted_names, [key]);
+    }
+    if (sorted_names.length !== names.length) {
+      throw new Error("BUG???");
+    }
+    for (let name of sorted_names) {
+      this.add_object(name, objs[name]);
+    }
   }
   encode(type_name, value) {
     const info = parse_name(type_name);

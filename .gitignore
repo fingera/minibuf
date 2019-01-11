@@ -1,3 +1,11 @@
 yarn.lock
 package-lock.json
 node_modules/
+
+test/byte.json
+test/uint.json
+test/int.json
+test/double.json
+test/string.json
+test/array.json
+test/object.json

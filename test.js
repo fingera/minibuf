@@ -2,56 +2,64 @@ const minibuf = require("./minibuf");
 const assert = require("assert");
 const fs = require("fs");
 
-const mini = new minibuf();
 
-mini.encode("null");
-mini.decode("null");
-
-console.log("testing byte...");
-for (let i = 0; i < 256; i++) {
-  const buf = {
-    bytes: [i],
-    cursor: 0,
+function run_test(file) {
+  const mini = new minibuf();
+  const obj = JSON.parse(fs.readFileSync(`${__dirname}/test/${file}`), (key, value) => {
+    if ((typeof value).toLowerCase() === "string") {
+      if (value.indexOf("minibuf_test_tag:") === 0) {
+        if (value === "minibuf_test_tag:NaN") {
+          return NaN;
+        } else if (value === "minibuf_test_tag:Infinity") {
+          return Infinity
+        } else if (value === "minibuf_test_tag:-Infinity") {
+          return -Infinity;
+        }
+      }
+    }
+    return value;
+  });
+  mini.add_object_set(obj.load);
+  for (let ok of obj.ok) {
+    const buf = {
+      bytes: ok.bytes,
+      cursor: 0,
+    };
+    assert.deepStrictEqual(buf.bytes, mini.encode(ok.type, ok.value));
+    if ((typeof ok.value).toLowerCase() === "object" && ok.value !== null) {
+      assert.deepStrictEqual(ok.compare || ok.value, mini.decode(ok.type, buf));
+    } else {
+      assert.strictEqual(ok.compare || ok.value, mini.decode(ok.type, buf));
+    }
+    assert.strictEqual(buf.cursor, ok.bytes.length);
   }
-  assert.deepStrictEqual(buf.bytes, mini.encode("byte", i));
-  assert.strictEqual(i, mini.decode("byte", buf));
-  assert.strictEqual(buf.cursor, 1);
+  for (let fail of obj.fail) {
+    if (fail.value !== undefined) {
+      assert.throws(mini.encode.bind(mini, fail.type, fail.value));
+    }
+    if (fail.bytes !== undefined) {
+      assert.throws(mini.decode.bind(mini, fail.type, fail.bytes));
+    }
+  }
+  console.log(`run ${file} passed`);
 }
-const test_byte_except = [
-  -1,
-  256,
-  1.1,
-  "",
-  {},
-  [],
-  () => {},
-];
-for (let byte of test_byte_except) {
-  assert.throws(mini.encode.bind(mini, "byte", byte));
-}
-console.log("testing byte... passed");
 
-console.log("testing byte array...");
-const test_byte_array = JSON.parse(fs.readFileSync("./byte_array.json"));
-const test_byte_array_keys = Object.keys(test_byte_array);
-for (let key of test_byte_array_keys) {
-  const value = test_byte_array[key];
-  const buf = {
-    bytes: value.bytes,
-    cursor: 0,
-  };
-  assert.deepStrictEqual(buf.bytes, mini.encode(key, value.value));
-  assert.deepStrictEqual(value.value, mini.decode(key, buf));
-  assert.strictEqual(buf.cursor, value.bytes.length);
-}
-const test_byte_array_except = [
-  -1,
-  256,
-  "",
-  {},
-  () => {},
-];
-for (let bytes of test_byte_array_except) {
-  assert.throws(mini.encode.bind(mini, "byte[]", bytes));
-}
-console.log("testing byte array... passed");
+run_test("byte.json");
+run_test("uint.json");
+run_test("int.json");
+run_test("double.json");
+run_test("string.json");
+run_test("object.json");
+
+// Special string
+const mini = new minibuf();
+assert.throws(mini.encode.bind(mini, "string", String.fromCharCode.apply(null, [0xD800])));
+assert.throws(mini.encode.bind(mini, "string", String.fromCharCode.apply(null, [0xD800, 0xE000])));
+assert.throws(mini.encode.bind(mini, "string", String.fromCharCode.apply(null, [0xD800, 0xDBFF])));
+// Special objects
+const objs = {
+  A: "B",
+  B: "C",
+  C: "A",
+};
+assert.throws(mini.add_object_set.bind(mini, objs));
