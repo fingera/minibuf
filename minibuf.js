@@ -500,24 +500,33 @@ class enc_object {
     // sort
     keys.sort();
     // gen coder
+    let super_encoder;
+    let super_decoder;
     const encoders = [];
     const decoders = [];
     const names = [];
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       const value = descriptors[key];
-      let coder;
-      if ((typeof value).toLowerCase() === "string") {
-        const info = parse_name(value);
-        const id = this._name2id[info.name];
-        throw_if(id === undefined, `bad sub type ${info.name}`);
-        coder = this._gen_array_coder(info.arr, info.arr.length - 1, id);
+      if (key === "__mini_super") {
+        const id = this._name2id[value];
+        throw_if(id === undefined, `bad super type ${value}`);
+        super_encoder = this._encoders[id];
+        super_decoder = this._decoders[id];
       } else {
-        coder = this._gen_object_coder(value);
+        let coder;
+        if ((typeof value).toLowerCase() === "string") {
+          const info = parse_name(value);
+          const id = this._name2id[info.name];
+          throw_if(id === undefined, `bad sub type ${info.name}`);
+          coder = this._gen_array_coder(info.arr, info.arr.length - 1, id);
+        } else {
+          coder = this._gen_object_coder(value);
+        }
+        encoders.push(coder[0]);
+        decoders.push(coder[1]);
+        names.push(key);
       }
-      encoders.push(coder[0]);
-      decoders.push(coder[1]);
-      names.push(key);
     }
     // merge coder
     const fixlen = names.length;
@@ -529,6 +538,9 @@ class enc_object {
         if ((typeof value).toLowerCase() !== "object") {
           throw new Error(`is not object`);
         }
+        if (super_encoder) {
+          super_encoder(arr, value);
+        }
         for (let i = 0; i < fixlen; i++) {
           try {
             encoders[i](arr, value[names[i]]);
@@ -537,7 +549,7 @@ class enc_object {
           }
         }
       }, (buf) => {
-        const ret = {};
+        const ret = super_decoder ? super_decoder(buf) : {};
         for (let i = 0; i < fixlen; i++) {
           try {
             ret[names[i]] = decoders[i](buf);

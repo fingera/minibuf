@@ -2,7 +2,7 @@
   "name": "minibuf",
   "version": "1.0.0",
   "description": "mini serializer",
-  "main": "index.js",
+  "main": "minibuf.js",
   "dependencies": {},
   "devDependencies": {
     "assert": "^1.4.1"
